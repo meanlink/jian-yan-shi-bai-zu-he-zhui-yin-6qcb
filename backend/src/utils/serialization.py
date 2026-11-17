@@ -8,4 +8,6 @@ def job_dict(j):
 def report_dict(r):
     return {k:getattr(r,k) for k in ['id','name','job_id','destination','interval_seconds','next_run','enabled']}
 def delivery_dict(d):
-    return {k:getattr(d,k) for k in ['id','report_id','created_at','checksum','filename','destination']}
+    data={k:getattr(d,k) for k in ['id','report_id','created_at','checksum','filename','destination']}
+    data.update({k:getattr(d,k) for k in ['archive_id','key_id','signing_state','signed_at','attempts','error','scheduled_for','verify_state','verify_message','verified_at']})
+    return data

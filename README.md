@@ -3,8 +3,8 @@
 关联规则的真实业务分析小型项目。完整模拟客户、痛点、上下游、算法公式与一天工作剧本见 [BUSINESS.md](BUSINESS.md)。
 
 ## 模块与业务流程
-数据接入（JSON/CSV、字段验证、批次指纹）→ 参数化分析（异步 Python worker）→ 结果复核（指标、图形、明细、解释、批准）→ 定时分发（本地收件箱、CSV/JSON、SHA256）；另有业务总览和审计轨迹。
-三个贯穿全栈的实体：Dataset 数据批次、Job 分析任务、Report 分发计划；辅助 User、Audit、Delivery。
+数据接入（JSON/CSV、字段验证、批次指纹）→ 参数化分析（异步 Python worker）→ 结果复核（指标、图形、明细、解释、批准）→ 定时分发（本地收件箱、CSV/JSON、SHA256、Ed25519 数字签章与独立验真）；另有业务总览和审计轨迹。
+三个贯穿全栈的实体：Dataset 数据批次、Job 分析任务、Report 分发计划；辅助 User、Audit、Delivery、SigningKey。
 
 ## 快速启动
 ```bash
@@ -22,6 +22,23 @@ docker compose exec -T backend python -m scripts.seed_demo
 |analyst@demo.local|Demo123!|接入、执行、读取与下载；不能批准或安排分发|
 |viewer@demo.local|Demo123!|只读与下载|
 
+## 归档数字签章与独立验真
+每份归档包含 CSV 与 JSON 两件附件，外加 `.manifest.json`（列出两件附件的 SHA256 与字节数）和 `.sig.json`（Ed25519 签名）。签名覆盖清单的规范化字节，接收方用信任目录中的公钥即可离线验真，无需私钥或后端访问。
+
+- 页面「分发档案」可查看密钥列表、验真状态，负责人可轮换或撤销密钥、下载信任目录。
+- 轮换：旧密钥退役（停止新签，旧件仍可验真）；与归档并发时，同一份附件始终沿用登记时的密钥。
+- 撤销：表示私钥泄露。用当前信任目录验真时，由该密钥签署的原件标注「受影响」，而非静默通过。
+- 中断恢复：签章中断的归档按原登记恢复，不重复登记、不改签已完成的原件；四件文件全部 fsync 后才标记已签章并开放下载。
+- 历史归档没有签章，页面与验真接口均明确标注「无签章（历史）」。
+
+独立验真工具（仅需 `cryptography`，不导入后端代码）：
+```bash
+python tools/verify_archive.py --trust trust-directory.json \
+  report-1-delivery-2.csv report-1-delivery-2.csv.json \
+  report-1-delivery-2.csv.manifest.json report-1-delivery-2.csv.sig.json
+```
+退出码 `0` 通过；`2` 篡改、缺件、混搭或未知密钥；`3` 签名有效但签发密钥已撤销（原件受影响）；`4` 信任目录不合法。信任目录中出现私钥会被直接拒绝。
+
 ## 技术与本地开发
 Python 3.12 / FastAPI / SQLAlchemy / NumPy / SciPy / scikit-learn；MySQL 8.0；Redis 7；Nginx；原生 HTML CSS JavaScript ES modules（用户指定）。后端所有校验、持久化和算法在服务端。无前端打包步骤。
 后端：安装 backend/requirements.txt，设置 DATABASE_URL、REDIS_URL、JWT_SECRET、ARTIFACT_DIR 后在 backend/ 执行 `python -m migrations.initial`、`python -m scripts.seed_demo`、`uvicorn src.main:app`，另开 `python -m src.worker`。前端使用带 /api 反向代理的 Nginx，直接打开 index.html 不支持 API。
@@ -32,7 +49,7 @@ frontend/src/{api,stores,types,components/common,hooks,pages,router,utils,consta
 Role 枚举：admin/analyst/viewer；JobStatus：queued/running/completed/failed。后端 backend/src/constants/enums.py，前端 frontend/src/constants/enums.js；路由权限在 middlewares/auth.py；页面按相同角色控制操作入口。
 
 ## 环境变量与 Docker
-COMPOSE_PROJECT_NAME=assay-rules；FRONTEND_PORT=18211；BACKEND_PORT=19211；DB_PORT=17711；DB_PASSWORD、JWT_SECRET 见 .env.example；SEED_DEMO 默认 true。共享命名产物卷供后端下载与 worker 写入，数据库/Redis 各持久卷。
+COMPOSE_PROJECT_NAME=assay-rules；FRONTEND_PORT=18211；BACKEND_PORT=19211；DB_PORT=17711；DB_PASSWORD、JWT_SECRET 见 .env.example；SEED_DEMO 默认 true。共享命名产物卷供后端下载、worker 写入与归档签章，数据库/Redis 各持久卷。
 恰好五服务均有健康检查。Redis 队列加 SQL 排队状态兜底；worker 按 next_run 生成本地收件箱文件。周期 60 秒至 30 天。分发结果为批准分析的固定快照；若需新数据重新计算并建立新计划。当前不连接邮件或企业聊天。
 错误响应、请求编号、Redis 每 IP 每分钟 240 次限流、JWT 和数据库操作审计。演示密钥与密码仅供本机模拟；生产部署前配置独立密钥与账号。
 
